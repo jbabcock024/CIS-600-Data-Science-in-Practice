@@ -1,0 +1,89 @@
+---
+title: "Lect 13"
+author: 'Josh Babcock #118'
+date: "`r Sys.Date()`"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(tidyverse)
+library(sqldf)
+library(nycflights13)
+
+Movie <- read.csv("movies.csv")
+student <- read.csv("students.csv", stringsAsFactors = FALSE)
+```
+
+```{r}
+head(student)
+head(sqldf("select * from student"))
+head(sqldf("select * from student where trim(major)='Math'"))
+head(sqldf("SELECT firstName FROM student WHERE major='CSC'"))
+
+
+```
+
+
+```{r}
+
+# Movie$ReleaseDate <- as.Date(Movie$ReleaseDate, "%d-%b-%y")
+head(Movie)
+
+
+head(sqldf("SELECT Title FROM Movie WHERE Rating='G'"))
+
+Movie |>
+  filter(Rating=="G") |>
+  select(Title) |>
+  head()
+
+
+head(sqldf(sprintf("SELECT Title, ReleaseDate FROM Movie WHERE ReleaseDate >%i", as.Date("2020-01-01"))))
+
+head(sqldf("SELECT Title FROM Movie WHERE Rating IN ('G', 'PG')"))
+
+head(sqldf("SELECT Title FROM Movie WHERE Rating='PG-13' AND Year >=2008"))
+
+head(sqldf("SELECT Title FROM Movie WHERE Budget > Gross"))
+
+head(sqldf("SELECT Title FROM Movie WHERE Budget > Gross"))
+
+head(sqldf("SELECT Title, Year, Budget FROM Movie WHERE Budget > 300000000"))
+
+```
+
+```{r}
+
+# SELECT
+#   month,
+#   AVG(dep_delay) AS avg_delay
+# FROM
+#   flights
+# GROUP BY
+#   month;
+
+sqldf("
+  SELECT
+    month,
+    AVG(dep_delay) AS avg_delay
+  FROM
+    flights
+  GROUP BY
+    month;
+") |>
+  head()
+
+
+flights |>
+  group_by(month) |>
+  summarize(
+    avg_delay = mean(dep_delay, na.rm = TRUE)
+  ) |>
+  head()
+
+
+
+
+```
