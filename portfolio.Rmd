@@ -1,0 +1,440 @@
+---
+title: "Portfolio Project"
+author: 'Josh Babcock #118'
+date: "`r Sys.Date()`"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(tidyverse)
+library(ggplot2)
+library(data.table)
+library(vroom)
+
+setDTthreads(24)
+
+
+netflow_data <- vroom("Argus_Output/combined/all_flows.csv", 
+                      show_col_types = FALSE,
+                      progress = TRUE)
+#problems(netflow_data)
+setDT(netflow_data)
+
+netflow_data_clean <- readRDS("netflow_data_clean_v1.rds")
+
+```
+
+```{r}
+
+#netflow_data <- netflow_data_original
+
+# Initial timestamp check
+print("Raw timestamp range:")
+print(range(netflow_data$StartTime, na.rm = TRUE))
+print("Missing timestamps:")
+print(sum(is.na(netflow_data$StartTime)))
+
+# Zero timestamp analysis
+zero_timestamps <- netflow_data[StartTime == 0 | LastTime == 0]
+
+print("Zero timestamp analysis:")
+print(paste("Total records:", nrow(netflow_data)))
+print(paste("Records with zero StartTime:", sum(netflow_data$StartTime == 0)))
+print(paste("Records with zero LastTime:", sum(netflow_data$LastTime == 0)))
+print(paste("Records with both times zero:", 
+           sum(netflow_data$StartTime == 0 & netflow_data$LastTime == 0)))
+
+# Protocol distribution for zero timestamps
+zero_proto_dist <- zero_timestamps[, .(
+  count = .N,
+  percent = .N/nrow(zero_timestamps)*100
+), by = Proto][order(-count)]
+
+print("Protocol distribution for zero timestamps:")
+print(zero_proto_dist)
+
+# Other characteristics of zero-timestamp records
+zero_characteristics <- zero_timestamps[, .(
+  unique_src = uniqueN(SrcAddr),
+  unique_dst = uniqueN(DstAddr),
+  unique_states = uniqueN(State),
+  avg_packets = mean(TotPkts, na.rm = TRUE),
+  avg_bytes = mean(TotBytes, na.rm = TRUE)
+), by = Proto][order(-unique_src)]
+
+print("Characteristics of zero-timestamp records by protocol:")
+print(zero_characteristics)
+
+# Additional patterns in zero-timestamp records
+print("Sample of zero-timestamp records (first 10 rows):")
+print(zero_timestamps[1:10, .(StartTime, LastTime, Proto, SrcAddr, DstAddr, State, TotPkts, TotBytes)])
+
+# Check for any temporal patterns in records adjacent to zero timestamps
+adjacent_records <- netflow_data[shift(StartTime == 0, 1) | shift(StartTime == 0, -1)]
+print("Sample of records adjacent to zero timestamps (first 10 rows):")
+print(adjacent_records[1:10, .(StartTime, LastTime, Proto, SrcAddr, DstAddr, State, TotPkts, TotBytes)])
+
+# Convert timestamps to datetime
+#netflow_data[, `:=`(
+#  StartTime_dt = as.POSIXct(StartTime, origin="1970-01-01", tz="EST"),
+#  LastTime_dt = as.POSIXct(LastTime, origin="1970-01-01", tz="EST")
+#)]
+netflow_data[, `:=`(
+  StartTime_dt = ifelse(StartTime == 0, NA, 
+                       as.POSIXct(StartTime, origin="1970-01-01", tz="EST")),
+  LastTime_dt = ifelse(LastTime == 0, NA, 
+                      as.POSIXct(LastTime, origin="1970-01-01", tz="EST"))
+)]
+
+
+# Comprehensive date analysis
+date_analysis <- data.table(
+  # Basic datetime info
+  min_start = min(netflow_data$StartTime_dt, na.rm = TRUE),
+  max_start = max(netflow_data$StartTime_dt, na.rm = TRUE),
+  min_last = min(netflow_data$LastTime_dt, na.rm = TRUE),
+  max_last = max(netflow_data$LastTime_dt, na.rm = TRUE),
+  
+  # Count of records by type
+  total_records = nrow(netflow_data),
+  missing_start = sum(is.na(netflow_data$StartTime_dt)),
+  missing_last = sum(is.na(netflow_data$LastTime_dt)),
+  
+  # Potential issues
+  future_dates = sum(netflow_data$StartTime_dt > Sys.time(), na.rm = TRUE),
+  negative_duration = sum(netflow_data$LastTime_dt < netflow_data$StartTime_dt, na.rm = TRUE)
+)
+
+print("Date Analysis Summary:")
+print(date_analysis)
+
+# Validate against expected experiment dates
+expected_dates <- as.Date(c(
+  "2023-10-30", # Monday - Recon
+  "2023-10-31", # Tuesday - Benign 1
+  "2023-11-01", # Wednesday - DoS
+  "2023-11-02", # Thursday - Brute Force and Spoofing
+  "2023-11-03"  # Friday - Benign 2
+))
+
+#date_validation <- data.table(
+#  date = date_sequence,
+#  has_data = date_sequence %in% daily_counts$date,
+#  expected = date_sequence %in% expected_dates
+#)
+
+#print("Date validation against expected experiment dates:")
+#print(date_validation)
+
+
+```
+
+```{r}
+
+# Define expected date range
+expected_start <- as.POSIXct("2023-10-30 00:00:00", tz="EST")
+expected_end <- as.POSIXct("2023-11-03 23:59:59", tz="EST")
+
+# Convert timestamps to datetime
+netflow_data[, `:=`(
+  StartTime_dt = as.POSIXct(StartTime, origin="1970-01-01", tz="EST"),
+  LastTime_dt = as.POSIXct(LastTime, origin="1970-01-01", tz="EST")
+)]
+
+# Analyze problematic timestamps
+timestamp_analysis <- data.table(
+  total_records = nrow(netflow_data),
+  zero_timestamps = sum(netflow_data$StartTime == 0 | netflow_data$LastTime == 0),
+  missing_timestamps = sum(is.na(netflow_data$StartTime_dt) | is.na(netflow_data$LastTime_dt)),
+  out_of_range = sum(!is.na(netflow_data$StartTime_dt) & 
+                     (netflow_data$StartTime_dt < expected_start | 
+                      netflow_data$StartTime_dt > expected_end)),
+  negative_duration = sum(netflow_data$LastTime_dt < netflow_data$StartTime_dt, na.rm=TRUE),
+  future_dates = sum(netflow_data$StartTime_dt > Sys.time(), na.rm=TRUE)
+)
+
+# Calculate percentages
+timestamp_analysis[, `:=`(
+  zero_timestamps_pct = zero_timestamps / total_records * 100,
+  missing_timestamps_pct = missing_timestamps / total_records * 100,
+  out_of_range_pct = out_of_range / total_records * 100,
+  negative_duration_pct = negative_duration / total_records * 100,
+  future_dates_pct = future_dates / total_records * 100
+)]
+
+print("Timestamp Analysis:")
+print(timestamp_analysis)
+
+# Show distribution of out-of-range dates
+out_of_range_dist <- netflow_data[!is.na(StartTime_dt) & 
+                                 (StartTime_dt < expected_start | 
+                                  StartTime_dt > expected_end), 
+                                 .(count = .N), 
+                                 by = .(date = as.Date(StartTime_dt))]
+print("Distribution of out-of-range dates:")
+print(out_of_range_dist[order(date)])
+
+# If percentages are acceptable, create cleaned dataset
+if(timestamp_analysis$out_of_range_pct < 5) {  # 5%
+  netflow_data_clean <- netflow_data[
+    StartTime != 0 &
+    LastTime != 0 &
+    !is.na(StartTime_dt) &
+    !is.na(LastTime_dt) &
+    StartTime_dt >= expected_start &
+    StartTime_dt <= expected_end &
+    LastTime_dt >= StartTime_dt &
+    StartTime_dt <= Sys.time()
+  ]
+  
+  # Verify cleaning results
+  print("Cleaning Results:")
+  print(paste("Original records:", nrow(netflow_data)))
+  print(paste("Cleaned records:", nrow(netflow_data_clean)))
+  print(paste("Removed records:", nrow(netflow_data) - nrow(netflow_data_clean)))
+  print(paste("Percentage removed:", 
+              round((nrow(netflow_data) - nrow(netflow_data_clean)) / 
+                      nrow(netflow_data) * 100, 2), "%"))
+  
+  # Show date range of cleaned data
+  print("Cleaned data date range:")
+  print(range(netflow_data_clean$StartTime_dt))
+  
+  # Show daily distribution of cleaned data
+  clean_daily_dist <- netflow_data_clean[, .(
+    count = .N
+  ), by = .(date = as.Date(StartTime_dt))]
+  
+  print("Daily distribution of cleaned data:")
+  print(clean_daily_dist[order(date)])
+}
+
+```
+
+```{r}
+
+# Save date/time cleaned dataset
+# As RDS (R's native format - faster to read/write and maintains data types)
+saveRDS(netflow_data_clean, "netflow_data_clean_v1.rds")
+
+# And as CSV
+fwrite(netflow_data_clean, "netflow_data_clean_v1.csv")
+
+```
+
+```{r}
+
+# Initial data structure analysis
+print("Data Structure Summary:")
+str(netflow_data_clean)
+
+# 1. Analyze missing values
+missing_analysis <- sapply(netflow_data_clean, function(x) {
+    c(missing = sum(is.na(x)),
+      missing_pct = round(sum(is.na(x))/length(x)*100, 2))
+})
+print("Missing Values Analysis:")
+print(missing_analysis)
+
+# 2. Start preprocessing
+netflow_clean_v2 <- copy(netflow_data_clean)  # Create a copy for preprocessing
+
+# Handle numeric fields
+numeric_cols <- c("TotPkts", "TotBytes", "TotAppByte", "Loss", "Rate", "SrcRate", "DstRate")
+netflow_clean_v2[, (numeric_cols) := lapply(.SD, function(x) ifelse(is.na(x), 0, x)), .SDcols = numeric_cols]
+
+# Standardize categorical fields
+# Protocol
+netflow_clean_v2[, Protocol_std := tolower(Proto)]
+
+# Flags
+netflow_clean_v2[, Flags_std := fcase(
+    is.na(Flgs), "none",
+    Flgs == "", "none",
+    default = Flgs
+)]
+
+# Direction
+netflow_clean_v2[, Direction_std := fcase(
+    is.na(Dir), "unknown",
+    Dir == "", "unknown",
+    Dir == "who", "who",
+    grepl("->", Dir), "outbound",
+    grepl("<-", Dir), "inbound",
+    default = Dir
+)]
+
+# State
+netflow_clean_v2[, State_std := fcase(
+    is.na(State), "unknown",
+    State == "", "unknown",
+    default = State
+)]
+
+# Port processing
+netflow_clean_v2[, `:=`(
+    Sport_num = as.integer(as.numeric(Sport)),
+    Dport_num = as.integer(as.numeric(Dport))
+)]
+
+# Port categorization
+netflow_clean_v2[, `:=`(
+    Sport_category = fcase(
+        is.na(Sport_num), "unknown",
+        Sport_num <= 0, "invalid",
+        Sport_num <= 1024, "well_known",
+        Sport_num <= 49151, "registered",
+        default = "dynamic"
+    ),
+    Dport_category = fcase(
+        is.na(Dport_num), "unknown",
+        Dport_num <= 0, "invalid",
+        Dport_num <= 1024, "well_known",
+        Dport_num <= 49151, "registered",
+        default = "dynamic"
+    )
+)]
+
+# IP address categorization
+netflow_clean_v2[, `:=`(
+    SrcAddr_type = fcase(
+        grepl("^192\\.168\\.", SrcAddr), "internal",
+        grepl("^10\\.", SrcAddr), "internal",
+        grepl("^172\\.(1[6-9]|2[0-9]|3[0-1])\\.", SrcAddr), "internal",
+        default = "external"
+    ),
+    DstAddr_type = fcase(
+        grepl("^192\\.168\\.", DstAddr), "internal",
+        grepl("^10\\.", DstAddr), "internal",
+        grepl("^172\\.(1[6-9]|2[0-9]|3[0-1])\\.", DstAddr), "internal",
+        default = "external"
+    )
+)]
+
+# Add derived features
+netflow_clean_v2[, `:=`(
+    bytes_per_packet = ifelse(TotPkts > 0, TotBytes/TotPkts, 0),
+    duration_seconds = as.numeric(difftime(LastTime_dt, StartTime_dt, units="secs")),
+    hour_of_day = hour(StartTime_dt),
+    minute_of_hour = minute(StartTime_dt),
+    day_of_week = weekdays(StartTime_dt),
+    traffic_direction = fcase(
+        SrcAddr_type == "internal" & DstAddr_type == "internal", "internal",
+        SrcAddr_type == "internal" & DstAddr_type == "external", "outbound",
+        SrcAddr_type == "external" & DstAddr_type == "internal", "inbound",
+        default = "external"
+    )
+)]
+
+# Print summary of new features
+print("New Features Summary:")
+new_features <- c("Protocol_std", "Flags_std", "Direction_std", "State_std",
+                 "Sport_category", "Dport_category", "SrcAddr_type", "DstAddr_type",
+                 "bytes_per_packet", "duration_seconds", "traffic_direction")
+
+for(feat in new_features) {
+    if(feat %in% names(netflow_clean_v2)) {
+        value_counts <- netflow_clean_v2[, .N, by=get(feat)][order(-N)][1:5]
+        print(paste(feat, "- Top 5 values:"))
+        print(value_counts)
+    }
+}
+
+
+
+# Cleaning of bad entries - missing protocols, unknown direction, invalid ports
+original_counts <- clean_daily_dist
+
+# Original daily counts
+print("Original daily counts:")
+print(original_counts)
+
+# Analyze problematic entries by protocol
+protocol_analysis <- netflow_clean_v2[, .(
+    total = .N,
+    missing_dir = sum(Direction_std == "unknown"),
+    invalid_sport = sum(Sport_category == "invalid"),
+    invalid_dport = sum(Dport_category == "invalid"),
+    unknown_sport = sum(Sport_category == "unknown"),
+    unknown_dport = sum(Dport_category == "unknown")
+), by = Protocol_std][order(-total)]
+
+print("Protocol-specific issues:")
+print(protocol_analysis)
+
+# Cross-tabulation of protocols with direction
+print("Protocol vs Direction:")
+protocol_dir_table <- netflow_clean_v2[, .N, by = .(Protocol_std, Direction_std)]
+print(protocol_dir_table[order(-N)])
+
+# Cross-tabulation of protocols with invalid ports
+print("Protocols with invalid ports:")
+invalid_ports_by_proto <- netflow_clean_v2[Sport_category == "invalid" | Dport_category == "invalid", 
+    .(count = .N), by = Protocol_std][order(-count)]
+print(invalid_ports_by_proto)
+
+# Analyze impact of removing problematic entries
+clean_data <- netflow_clean_v2[
+    Protocol_std != "" &  # Remove missing protocols
+    !(Sport_category %in% c("invalid", "unknown")) &  # Remove invalid/unknown source ports
+    !(Dport_category %in% c("invalid", "unknown")) &  # Remove invalid/unknown destination ports
+    Direction_std != "unknown"  # Remove unknown directions
+]
+
+# Compare daily counts
+print("Daily counts after removing problematic entries:")
+clean_counts <- clean_data[, .(
+    count = .N
+  ), by = .(date = as.Date(StartTime_dt))]
+comparison <- merge(original_counts, clean_counts, by="date", suffixes=c("_original", "_clean"))
+comparison[, difference := count_original - count_clean]
+comparison[, difference_pct := (difference/count_original)*100]
+print(comparison)
+
+# Detailed analysis of removed entries
+print("Summary of removed entries:")
+print(paste("Total original entries:", nrow(netflow_clean_v2)))
+print(paste("Entries after cleaning:", nrow(clean_data)))
+print(paste("Removed entries:", nrow(netflow_clean_v2) - nrow(clean_data)))
+print(paste("Percentage removed:", round((nrow(netflow_clean_v2) - nrow(clean_data))/nrow(netflow_clean_v2)*100, 2), "%"))
+
+# Check if certain protocols typically have unknown directions or invalid ports
+print("Protocols with high percentage of unknown direction:")
+direction_analysis <- netflow_clean_v2[, .(
+    total = .N,
+    unknown_dir_pct = sum(Direction_std == "unknown")/.N*100
+), by = Protocol_std][unknown_dir_pct > 0][order(-unknown_dir_pct)]
+print(direction_analysis)
+
+print("Protocols with high percentage of invalid ports:")
+port_analysis <- netflow_clean_v2[, .(
+    total = .N,
+    invalid_port_pct = sum(Sport_category == "invalid" | Dport_category == "invalid")/.N*100
+), by = Protocol_std][invalid_port_pct > 0][order(-invalid_port_pct)]
+print(port_analysis)
+
+# Further standardization of direction
+netflow_clean_v2[, Direction_std := fcase(
+    is.na(Dir), "unknown",
+    Dir == "", "unknown",
+    Dir == "who", "who",
+    grepl("->", Dir), "outbound",
+    grepl("<-", Dir), "inbound",
+    grepl("[<>?]", Dir), "partial",  # New category for partial connections
+    default = Dir
+)]
+
+# Add traffic type categorization
+netflow_clean_v2[, traffic_type := fcase(
+    Protocol_std == "icmp", "control_traffic",
+    Protocol_std %in% c("arp", "rarp"), "network_discovery",
+    Protocol_std == "udp" & Dport_category == "unknown", "broadcast_traffic",
+    Protocol_std == "tcp" & Direction_std == "partial", "incomplete_connection",
+    default = "standard_traffic"
+)]
+
+saveRDS(netflow_clean_v2, "netflow_data_clean_v2.rds")
+
+```

@@ -1,0 +1,21 @@
+Class distribution:
+is_attack
+1    0.997559
+0    0.002441
+Name: proportion, dtype: float64
+Training Random Forest model...
+
+Classification Report:
+              precision    recall  f1-score   support
+
+           0       0.61      0.71      0.65     50853
+           1       1.00      1.00      1.00  20784511
+
+    accuracy                           1.00  20835364
+   macro avg       0.80      0.85      0.83  20835364
+weighted avg       1.00      1.00      1.00  20835364
+
+
+
+FAR = FP / (FP + TN) = 0.29473187422 = 29.47%
+FRR = FN / (FN + TP) = 0.00110033861 = 0.11%

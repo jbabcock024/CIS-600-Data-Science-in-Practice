@@ -1,0 +1,242 @@
+---
+title: "Learning Portfolio Assignment 4"
+author: 'Josh Babcock #118'
+date: "`r Sys.Date()`"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, eval = FALSE)
+
+library(tidyverse)
+library(ggplot2)
+library(data.table)
+```
+
+```{r import_data}
+netflow_data <- readRDS("../project/code/netflow_data_clean_v2.rds")
+
+setDTthreads(36)
+setDT(netflow_data)
+
+```
+
+```{r}
+
+# 2023-10-30  Monday    - Recon
+# 2023-10-31  Tuesday   - Benign 1
+# 2023-11-01  Wednesday - DoS
+# 2023-11-02  Thursday  - Brute Force and Spoofing
+# 2023-11-03  Friday    - Benign 2
+
+#   Task 1 - Traffic Rate Analysis
+# 
+#   Objective
+#   - The objective is to characterize network traffic patterns during normal
+#     operations versus attack periods
+#     
+#   Type of task
+#   - Hybrid approach
+#     - Database Queries for rate calculations
+#     - Data Visualization for pattern analysis
+# 
+#   Implementation
+#   - Use time-series analysis with hourly aggregation to calculate traffic rates
+#   - Separate data into benign and attack periods for comparison
+# 
+#   Results
+#   - Generated time-series plots that show bytes/s for ICMP, TCP, and UDP
+# 
+#   Assessment
+#   - Benign traffic is mostly TCP
+#   - Malicious traffic is mostly UDP, but TCP is also a significant amount
+#     - The next step would be to find away to distinguish between benign and
+#       malicious TCP traffic
+
+#   Task 2 - Network Flow Size Analysis
+# 
+#   Objective
+#   - The objective is to analyze and characterize the size distribution of
+#     network flows across different protocols and identify potential anomalies
+#     
+#   Type of task
+#   - Hybrid approach
+#     - Database Queries for statistical calculations
+#     - Data Visualization for distribution analysis
+# 
+#   Implementation
+#   - Use boxplots to visualize flow size distributions by protocol
+#   - Handle extreme outliers by focusing on 99th percentile and below
+#   - Implement log scaling for better visibility of distributions
+# 
+#   Results
+#   - Generated boxplots showing flow size distributions separated by:
+#     - Protocol (ICMP, TCP, UDP)
+#     - Date (attack vs benign days)
+#   - Summary of flow statistics
+# 
+#   Assessment
+#   - UDP flows show the most variation in size
+#   - TCP flows are generally smaller but more inconsistent in size and number of outliers
+#   - ICMP flows are very similar to each other
+#   - Attack days show different distribution patterns compared to benign days
+#     - Further analysis needed to characterize these differences
+
+#   Task 3 - Source-Destination Pair Analysis
+# 
+#   Objective
+#   - The objective is to analyze communication patterns between internal and
+#     external network entities to identify potential security concerns
+#     
+#   Type of task
+#   - Hybrid approach
+#     - Database Queries for relationship analysis
+#     - Data Visualization for pattern detection
+# 
+#   Implementation
+#   - Analyze source-destination relationships
+#   - Calculate flow statistics for different communication types
+#   - Visualize proportional traffic distribution
+# 
+#   Results
+#   - Generated stacked bar chart showing traffic distribution patterns
+#   - Summary of flow statistics
+# 
+#   Assessment
+#   - Benign days consist mostly of internal-internal and internal-external traffic
+#   - Days 1 and 3 (attack) are dominated by one type of traffic, while day 4 
+#     (attack) mimics days 2 and 5 (benign)
+
+#   Drawing Conclusion
+#   
+#   Import
+#   - tidyverse
+#   - ggplot2 for visualizations
+#   - data.table for vectorized operations (faster with large datasets)
+#   - vroom for faster reading of CSV files
+#   - custom dataset made from packet captures
+#   
+#   Tidy
+#   - perform analyses to understand structure of dataset
+#   - do research to understand why the structure may be the way it is
+#     - for example, discovery using UDP often has unknown destination ports, so
+#       these entries shouldn't be removed despite looking incorrect
+#   - clean data (drop entries with dates outside of the expected range)
+#
+#   Understand Loop
+#   - Transform
+#     - Add data types and additional features like rates (bytes per hour)
+#   - Visualize
+#     - As done in LP AS03/04
+#   - Model
+#     - TBC (Machine Learning with Python: Naive Bayes, Random Forest, XGBoost)
+#
+#   Communicate
+#   - Summarize and explain implementations, outputs, and future work
+
+```
+
+
+```{r task_one}
+
+# Calculate traffic rates and patterns
+traffic_rates <- netflow_data[, .(
+    packets_per_second = sum(TotPkts, na.rm = TRUE) / 3600,  # hourly rate
+    bytes_per_second = sum(TotBytes, na.rm = TRUE) / 3600,
+    unique_connections = uniqueN(paste(SrcAddr, DstAddr))
+), by = .(
+    hour = floor_date(StartTime_dt, "hour"),
+    Protocol_std,
+    day_type = ifelse(as.Date(StartTime_dt) %in% 
+                     as.Date(c("2023-10-31", "2023-11-03")), 
+                     "Benign", "Attack")
+)][Protocol_std %in% c("tcp", "udp", "icmp")]
+
+# Visualize traffic rates
+ggplot(traffic_rates, 
+       aes(x = hour, y = bytes_per_second, color = Protocol_std)) +
+  geom_line() +
+  facet_wrap(~day_type, scales = "free_y", ncol = 1) +
+  theme_minimal() +
+  scale_y_continuous(labels = scales::comma) +
+  labs(title = "Traffic Rate Over Time",
+       subtitle = "Separated by Day Type",
+       x = "Time",
+       y = "Bytes per Second",
+       color = "Protocol")
+
+knitr::include_graphics("task1_plot.png")
+
+```
+
+```{r task_two}
+
+# Remove infinite values and set limits for better visualization
+flow_size_analysis <- netflow_data[
+  Protocol_std %in% c("tcp", "udp", "icmp") & 
+  TotBytes > 0 & 
+  TotBytes < quantile(TotBytes, 0.99, na.rm = TRUE)  # Remove extreme outliers
+]
+
+# Create box plots with better scaling
+ggplot(flow_size_analysis, 
+       aes(x = Protocol_std, y = TotBytes, fill = Protocol_std)) +
+  geom_boxplot(outlier.alpha = 0.1) +
+  facet_wrap(~as.Date(StartTime_dt)) +
+  theme_minimal() +
+  scale_y_continuous(
+    trans = "log10",
+    labels = scales::comma,
+    breaks = scales::pretty_breaks()
+  ) +
+  labs(title = "Flow Size Distribution by Protocol",
+       subtitle = "Excluding extreme outliers (>99th percentile)",
+       x = "Protocol",
+       y = "Total Bytes (log scale)",
+       fill = "Protocol")
+
+# Add summary statistics
+flow_summary <- flow_size_analysis[, .(
+    mean_size = mean(TotBytes, na.rm = TRUE),
+    median_size = median(TotBytes, na.rm = TRUE),
+    q25 = quantile(TotBytes, 0.25, na.rm = TRUE),
+    q75 = quantile(TotBytes, 0.75, na.rm = TRUE)
+), by = .(Protocol_std, date = as.Date(StartTime_dt))]
+
+knitr::include_graphics("task2_plot.png")
+
+```
+
+```{r task_three}
+
+# Analyze common communication patterns
+pair_analysis <- netflow_data[, .(
+    flow_count = .N,
+    total_bytes = sum(TotBytes, na.rm = TRUE),
+    unique_protocols = uniqueN(Protocol_std)
+), by = .(
+    src_type = SrcAddr_type,
+    dst_type = DstAddr_type,
+    date = as.Date(StartTime_dt)
+)]
+
+# Create alluvial/sankey-like visualization
+ggplot(pair_analysis, 
+       aes(x = date, y = flow_count, fill = interaction(src_type, dst_type))) +
+  geom_bar(stat = "identity", position = "fill") +
+  theme_minimal() +
+  scale_y_continuous(labels = scales::percent) +
+  labs(title = "Source-Destination Traffic Distribution",
+       x = "Date",
+       y = "Percentage of Flows",
+       fill = "Traffic Type")
+
+# Add summary table
+summary_table <- pair_analysis[, .(
+    avg_flows = mean(flow_count),
+    total_flows = sum(flow_count),
+    avg_bytes = mean(total_bytes)
+), by = .(src_type, dst_type)]
+
+knitr::include_graphics("task3_plot.png")
+```

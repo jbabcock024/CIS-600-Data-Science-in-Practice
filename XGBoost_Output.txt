@@ -1,0 +1,19 @@
+Class distribution:
+is_attack
+1    0.997559
+0    0.002441
+
+Classification Report:
+              precision    recall  f1-score   support
+
+           0       0.41      1.00      0.59     50853
+           1       1.00      1.00      1.00  20784511
+
+    accuracy                           1.00  20835364
+   macro avg       0.71      1.00      0.79  20835364
+weighted avg       1.00      1.00      1.00  20835364
+
+
+Additional Metrics:
+False Acceptance Rate (FAR): 0.0001
+False Rejection Rate (FRR): 0.0035

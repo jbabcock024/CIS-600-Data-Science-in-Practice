@@ -1,0 +1,234 @@
+---
+title: "Learning Portfolio Assignment 3"
+author: 'Josh Babcock #118'
+date: "`r Sys.Date()`"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(tidyverse)
+library(ggplot2)
+library(data.table)
+
+netflow_data <- readRDS("../project/code/netflow_data_clean_v2.rds")
+
+```
+
+```{r}
+
+# Task 1 - Traffic Pattern Analysis by Protocol Over Time
+
+# Create hourly protocol distribution
+hourly_protocol <- netflow_data[, .(
+    count = .N,
+    bytes = sum(TotBytes, na.rm = TRUE)
+  ), by = .(
+    hour = floor_date(StartTime_dt, "hour"),
+    Protocol_std
+  )][order(hour)]
+
+# Visualize top protocols over time
+ggplot(hourly_protocol[Protocol_std %in% c("tcp", "udp", "icmp", "arp")], 
+       aes(x = hour, y = count, color = Protocol_std)) +
+  geom_line() +
+  theme_minimal() +
+  scale_y_log10() +  # Use log scale for better visualization
+  labs(title = "Protocol Distribution Over Time",
+       x = "Time",
+       y = "Number of Packets (log scale)",
+       color = "Protocol") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+# Objective - Understand and (visually) identify the distribution and patterns
+#             of network protocols over time.
+# Task type - DV with supporting DQ
+# Implementation - Uses data table aggregation to summarize protocol usage by
+#                 hour, then use ggplot to create a visualization.
+# Results - Protocol distribution is relatively flat until Nov 1st (DOS attack
+#           day), where UDP, TCP, and ICMP protocols spike. ARP remains flat.
+# Comments - Log scale used to better visualize protocols with different volumes.
+
+```
+
+```{r, eval=FALSE}
+
+# Task 2 - Attack Pattern Detection
+
+# Analyze potential attack patterns
+attack_indicators <- netflow_data[, .(
+    total_connections = .N,
+    unique_destinations = uniqueN(DstAddr),
+    avg_bytes = mean(TotBytes, na.rm = TRUE),
+    total_bytes = sum(TotBytes, na.rm = TRUE)
+  ), by = .(
+    source = SrcAddr,
+    hour = floor_date(StartTime_dt, "hour")
+  )][order(-total_connections)]
+
+# Visualize potential attackers
+ggplot(attack_indicators[total_connections > quantile(total_connections, 0.99)], 
+       aes(x = total_connections, y = unique_destinations)) +
+  geom_point(aes(size = total_bytes, color = hour)) +
+  theme_minimal() +
+  labs(title = "Potential Attack Pattern Detection",
+       x = "Total Connections",
+       y = "Unique Destinations",
+       size = "Total Bytes",
+       color = "Hour")
+
+# Objective - Identify potential malicious activities by analyzing connection
+#             patterns and traffic volumes.
+# Task type - DQ for pattern detection and DV for visualization.
+# Implementation - Aggregates data by source IP and hour to calculate metrics
+#                 indicative of attacks (such as high connection counts).
+# Results -
+# Comments - Threshold for suspicious activity may need adjustment based on
+#            network size.
+#          - (Did not execute code, 87 million groups to process)
+
+```
+
+```{r}
+
+# Task 3 - Internal vs External Traffic Analysis
+
+# Analyze traffic directions
+traffic_summary <- netflow_data[, .(
+    packet_count = .N,
+    total_bytes = sum(TotBytes, na.rm = TRUE),
+    unique_sources = uniqueN(SrcAddr),
+    unique_destinations = uniqueN(DstAddr)
+  ), by = .(
+    date = as.Date(StartTime_dt),
+    traffic_direction
+  )]
+
+# Create a faceted visualization
+ggplot(traffic_summary, aes(x = date, y = total_bytes)) +
+  geom_bar(stat = "identity", aes(fill = traffic_direction)) +
+  facet_wrap(~traffic_direction, scales = "free_y") +
+  theme_minimal() +
+  labs(title = "Traffic Direction Analysis",
+       x = "Date",
+       y = "Total Bytes",
+       fill = "Traffic Direction")
+
+# Objective - Analyze the flow of traffic between internal and external networks
+#             to understand network boundaries and potential data exfiltration.
+# Task type - DV.
+# Implementation - Groups traffic by direction and date.
+# Results - Clear delineations of days (attack, benign) visible in the charts.
+# Comments - 
+
+```
+
+```{r}
+
+# Task 4 - Port Usage Analysis
+
+# Analyze port usage patterns with more detailed categorization
+port_analysis <- netflow_data[Protocol_std %in% c("tcp", "udp"), .(
+    connection_count = .N,
+    total_bytes = sum(TotBytes, na.rm = TRUE)
+  ), by = .(
+    Protocol_std,
+    port = Dport_num,
+    port_category = Dport_category
+  )][order(-connection_count)]
+
+# Get top 20 ports for better visibility
+top_ports <- port_analysis[connection_count > quantile(connection_count, 0.95)][1:20]
+
+# Add port service names (you can expand this dictionary)
+port_services <- data.table(
+    port = c(80, 443, 53, 22, 1900, 67, 68, 123, 161, 162, 8080),
+    service = c("HTTP", "HTTPS", "DNS", "SSH", "SSDP", "DHCP", "DHCP", "NTP", "SNMP", "SNMP", "HTTP-ALT")
+)
+
+# Add service names to the data
+top_ports[port_services, service := i.service, on="port"]
+top_ports[is.na(service), service := as.character(port)]
+
+# Visualization - Split by protocol
+ggplot(top_ports, 
+       aes(x = reorder(service, connection_count), 
+           y = connection_count)) +
+  geom_bar(stat = "identity", 
+           aes(fill = port_category),
+           width = 0.7) +
+  facet_wrap(~Protocol_std, scales = "free_y") +
+  coord_flip() +
+  theme_minimal() +
+  theme(
+    axis.text.y = element_text(size = 10),
+    legend.position = "right"
+  ) +
+  scale_y_continuous(labels = scales::comma) +
+  labs(title = "Top Ports by Protocol",
+       subtitle = "Separated by TCP and UDP",
+       x = "Port (Service)",
+       y = "Number of Connections",
+       fill = "Port Category")
+
+# Objective - Identify commonly used ports.
+# Task type - DQ with supporting DV.
+# Implementation - Analyze port usage of TCP and UDP.
+# Results - Unclear results from visualization.
+# Comments - 
+# For UDP:
+# - Many IoT devices use UDP for discovery protocols (like SSDP on port 1900)
+# - Broadcast/multicast messages often have null or empty destination ports
+# - DNS queries, DHCP, and other common IoT protocols use UDP
+# - The high number of unknown destination ports in UDP traffic is
+#   likely due to response packets or broadcast traffic
+# For TCP:
+# - The high number of unknown ports could be from:
+# -- Dynamic port allocation for IoT device connections
+# -- Connection attempts that didn't complete
+# -- Port scanning (especially on 11/1 DOS and 11/2 Brute Force & Spoofing)
+
+```
+
+```{r}
+
+# Task 5 - Temporal Pattern Analysis
+
+# Analyze traffic patterns by time
+temporal_patterns <- netflow_data[, .(
+    connection_count = .N,
+    bytes_transferred = sum(TotBytes, na.rm = TRUE),
+    unique_ips = uniqueN(c(SrcAddr, DstAddr))
+  ), by = .(
+    date = as.Date(StartTime_dt),
+    hour = hour(StartTime_dt),
+    day_type = ifelse(as.Date(StartTime_dt) %in% 
+                     as.Date(c("2023-10-31", "2023-11-03")), 
+                     "Benign", "Attack")
+  )]
+
+# Create heat map
+ggplot(temporal_patterns, 
+       aes(x = hour, y = date, fill = log10(connection_count))) +
+  geom_tile() +
+  scale_fill_gradient2(low = "white", 
+                      mid = "yellow",
+                      high = "red",
+                      midpoint = median(log10(temporal_patterns$connection_count))) +
+  theme_minimal() +
+  labs(title = "Traffic Intensity Heat Map (Log Scale)",
+       x = "Hour of Day",
+       y = "Date",
+       fill = "Log10(Connections)")
+
+# Objective - Understand traffic patterns across different times and days,
+#             particularly comparing benign vs attack days.
+# Task type - DV.
+# Implementation - Creates hourly aggregations of traffic metrics.
+#                - Uses heat map to visualize intensity across time.
+# Results - Significant concentration of connections on Nov 1st (DOS day).
+# Comments - Log scale needed as the number of connections on Nov 1st would
+#            otherwise overshadow the rest of the days/times.
+
+```
